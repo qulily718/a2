@@ -1,0 +1,19 @@
+# 策略参数配置
+strategy:
+  # 趋势跟随参数
+  trend_following:
+    ma_short: 5      # 短期均线
+    ma_long: 20      # 长期均线
+    momentum_period: 5  # 动量周期
+    
+  # 筛选条件
+  filters:
+    min_price: 5.0      # 最低价格
+    max_price: 500.0    # 最高价格
+    min_volume_ratio: 1.2  # 最小成交量比率
+    max_volatility: 0.4    # 最大波动率
+    
+  # 评分权重
+  scoring:
+    technical_weight: 0.7   # 技术面权重
+    fundamental_weight: 0.3  # 基本面权重

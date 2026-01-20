@@ -1,0 +1,55 @@
+# config/sectors.yaml - 已验证的标准格式
+focus_sectors:
+  - name: "有色金属"
+    code: "有色金属"
+    weight: 0.35
+    risk_level: "medium"
+
+  - name: "煤炭开采"
+    code: "煤炭行业"
+    weight: 0.20
+    risk_level: "low"
+
+  - name: "半导体"
+    code: "半导体"
+    weight: 0.20
+    risk_level: "high"
+
+  - name: "化学原料"
+    code: "化学原料"
+    weight: 0.10
+    risk_level: "medium"
+
+  - name: "计算机应用"
+    code: "软件开发"
+    weight: 0.15
+    risk_level: "high"
+
+scan_params:
+  # 基础参数
+  data_period: "6mo"
+  min_trading_days: 60
+  min_avg_volume: 10000000
+  max_stocks_per_sector: 20
+  
+  # 价格参数（添加缺失的参数）
+  min_price: 5.0
+  max_price: 200.0
+  min_volume: 10000000
+  
+  # 技术参数
+  ma_periods: [5, 10, 20]
+  price_above_ma: 20
+  min_5d_change: 2.0
+  max_5d_change: 15.0
+  min_20d_change: 5.0
+  max_volatility: 0.4
+  volume_ratio_threshold: 1.2
+  
+  # 评分权重
+  weights:
+    trend: 0.25
+    momentum: 0.25
+    volume: 0.20
+    volatility: 0.15
+    position: 0.15

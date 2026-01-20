@@ -1,0 +1,22 @@
+# 风控规则配置
+risk_management:
+  # 仓位管理
+  position:
+    max_position_per_stock: 0.2    # 单只股票最大仓位20%
+    max_position_per_sector: 0.4   # 单个板块最大仓位40%
+    max_total_position: 0.8        # 最大总仓位80%
+    
+  # 止损止盈
+  stop_loss:
+    enabled: true
+    loss_threshold: -0.05    # 止损线-5%
+    
+  stop_profit:
+    enabled: true
+    profit_threshold: 0.15   # 止盈线15%
+    
+  # 风险等级限制
+  risk_limits:
+    high_risk_max_position: 0.1    # 高风险股票最大仓位10%
+    medium_risk_max_position: 0.15  # 中风险股票最大仓位15%
+    low_risk_max_position: 0.2     # 低风险股票最大仓位20%
