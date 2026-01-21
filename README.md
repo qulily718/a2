@@ -82,6 +82,43 @@
 - **信号生成**：看涨/看跌/中性信号
 - **强度评估**：趋势强度量化评分
 
+### 6. 交易决策模块 (`src/strategy/trading_decision.py`)
+
+- **买入信号生成**：基于技术评分和市场状况生成买入建议
+- **价格区间建议**：计算合理的买入价格区间
+- **风险收益比**：评估每笔交易的风险收益比
+- **交易计划生成**：自动生成详细的交易计划
+- **买入前检查清单**：5项检查确保交易安全
+
+**买入信号等级**：
+- **积极买入**（评分≥75）：买入区间-1%~+2%，仓位5-7%，持有3-5天
+- **谨慎买入**（评分65-75）：买入区间-1.5%~+1%，仓位3.5-5%，持有5-7天
+- **观望**（评分<65）：不建议买入
+
+### 7. 全时段分析系统 (`src/analyzer/time_pattern_analyzer.py`)
+
+- **时间模式识别**：自动识别当前时间段（开盘/盘中/午间/尾盘/盘后/盘前/周末）
+- **针对性分析**：根据不同时间段提供针对性的分析内容
+- **趋势预测**：预测下午/明日/下周走势
+- **操作建议**：根据时间段生成具体操作建议
+
+**支持的时间段**：
+- 开盘30分钟（9:30-10:00）：开盘强势股识别
+- 上午盘中（10:00-11:30）：趋势确认、回调机会
+- 午间休市（11:30-13:00）：上午总结、下午预判
+- 下午开盘（13:00-14:00）：下午走势分析
+- 下午盘中（14:00-14:30）：全天趋势确认
+- 尾盘（14:30-15:00）：尾盘异动、次日预判
+- 盘后（15:00后）：全天复盘、技术分析
+- 盘前（21:00-9:30）：隔夜消息、技术形态
+- 周末（周六/周日）：周线分析、下周策略
+
+### 7. 仓位管理器 (`src/strategy/position_sizer.py`)
+
+- **金字塔式仓位管理**：根据风险计算合理仓位
+- **单笔风险控制**：默认单笔最大风险2%
+- **仓位建议**：根据信心水平和风险收益比调整仓位
+
 ### 6. 数据验证与缓存
 
 - **数据验证器** (`src/data/data_validator.py`)：验证数据完整性和质量
@@ -106,7 +143,15 @@ short_term_robust_trading/
 │   ├── strategy/                # 策略模块
 │   │   ├── trend_follower.py    # 趋势跟随策略
 │   │   ├── risk_manager.py      # 风险管理
-│   │   └── position_sizer.py   # 仓位计算
+│   │   ├── position_sizer.py   # 仓位计算
+│   │   └── trading_decision.py  # 交易决策
+│   │
+│   ├── analyzer/                # 分析器模块
+│   │   └── time_pattern_analyzer.py  # 时间模式分析器
+│   │
+│   ├── monitor/                 # 监控模块
+│   │   ├── open_market_monitor.py   # 开盘监控
+│   │   └── open_decision_maker.py    # 开盘决策
 │   │
 │   └── ui/                      # 用户界面（可选）
 │       ├── dashboard.py         # 主仪表板
@@ -122,11 +167,20 @@ short_term_robust_trading/
 ├── results/                    # 扫描结果（CSV格式）
 ├── backtests/                  # 回测结果
 │
-├── main.py                     # 主程序入口
+├── main.py                     # 主程序入口（标准版）
+├── main_realtime.py            # 主程序入口（实时动态版）
+├── analyze_anytime.py          # 全时段分析系统
+├── analyze_stock_trends.py     # 股票趋势分析工具
+├── monitor_open_market.py      # 开盘监控系统
+├── run_analysis.py             # 快捷分析脚本
+├── run_open_monitor.py         # 开盘监控自动运行
 ├── debug_sectors.py            # 板块名称调试工具
 ├── test_*.py                   # 测试脚本
 ├── requirements.txt            # 依赖包
-└── README.md                   # 项目说明
+├── README.md                   # 项目说明
+├── TRADING_GUIDE.md            # 交易操作指南
+├── ANYTIME_ANALYSIS.md         # 全时段分析指南
+└── MONITOR_README.md           # 开盘监控指南
 ```
 
 ## 🚀 快速开始
@@ -150,6 +204,23 @@ pip install -r requirements.txt
 - `streamlit>=1.28.0` - Web界面（可选）
 - `plotly>=5.18.0` - 数据可视化（可选）
 
+### 3. 阅读操作指南
+
+**重要**：在开始交易前，请仔细阅读操作指南：
+
+```bash
+# 查看操作指南
+cat TRADING_GUIDE.md
+# 或直接打开文件查看
+```
+
+操作指南包含：
+- 策略定位和操作周期
+- 买入时机和价格建议
+- 仓位管理框架
+- 完整操作流程
+- 实战操作示例
+
 ### 3. 配置板块
 
 编辑 `config/sectors.yaml`，配置关注的板块：
@@ -170,16 +241,39 @@ python debug_sectors.py
 
 ### 4. 运行主程序
 
+**实时动态版（推荐）**：
+```bash
+python main_realtime.py
+```
+
+**标准版**：
 ```bash
 python main.py
 ```
 
+**全时段分析版（任何时间运行）**：
+```bash
+python analyze_anytime.py
+```
+
 程序将：
 1. 加载配置文件
-2. 分析市场环境
+2. 实时分析板块强度
 3. 推荐关注板块
 4. 筛选符合策略的个股
-5. 生成分析报告并保存到 `results/` 目录
+5. **生成交易决策和买入建议**
+6. 生成分析报告并保存到 `results/` 目录
+
+**全时段分析系统特点**：
+- 自动检测当前时间，选择对应分析模式
+- 支持开盘、盘中、午间、尾盘、盘后、盘前、周末等所有时间段
+- 根据时间段提供针对性的分析内容和操作建议
+
+**输出文件**：
+- `recommended_stocks_YYYYMMDD_HHMMSS.csv` - 推荐个股（含交易建议）
+- `trading_plans_YYYYMMDD_HHMMSS.txt` - 详细交易计划
+- `top_sectors_YYYYMMDD_HHMMSS.csv` - 推荐板块
+- `sector_data_YYYYMMDD_HHMMSS.csv` - 板块数据
 
 ## ⚙️ 配置说明
 
@@ -249,6 +343,14 @@ risk_management:
 - `stop_loss`: 建议止损位置
 - `risk_level`: 风险等级
 - `rank_reasons`: 推荐理由
+
+**交易决策字段**（新增）：
+- `buy_suggested_action`: 操作建议（积极买入/谨慎买入/观望）
+- `buy_price_range`: 建议买入价格区间
+- `buy_position_size`: 建议仓位比例
+- `buy_holding_days`: 建议持有天数
+- `buy_target_price`: 目标价格
+- `buy_risk_reward_ratio`: 风险收益比
 
 ## 🛠️ 调试工具
 
@@ -357,6 +459,13 @@ scan_params:
    - 买入：总评分 ≥ 70 且趋势向上
    - 观望：总评分 60-70 或趋势不明
    - 卖出：总评分 < 60 或趋势向下
+
+## 📚 相关文档
+
+- **操作指南**：`TRADING_GUIDE.md` - 详细的交易操作指南
+- **功能清单**：`FEATURES.md` - 完整功能特性列表
+- **全时段分析**：`ANYTIME_ANALYSIS.md` - 全时段市场分析系统使用指南
+- **开盘监控**：`MONITOR_README.md` - 开盘监控系统使用说明
 
 ## 📄 许可证
 

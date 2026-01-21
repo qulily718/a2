@@ -1,0 +1,72 @@
+# 定时分析任务配置
+schedule_tasks:
+  # 盘前分析 (8:45)
+  pre_market:
+    enabled: true
+    time: "08:45"
+    mode: "pre_market"
+    description: "盘前分析，制定当日策略"
+  
+  # 开盘分析 (9:35)
+  morning_open:
+    enabled: true
+    time: "09:35"
+    mode: "morning_open"
+    description: "开盘30分钟分析"
+  
+  # 上午盘中分析 (10:30)
+  morning_mid:
+    enabled: true
+    time: "10:30"
+    mode: "morning_mid"
+    description: "上午盘中趋势分析"
+  
+  # 午间分析 (11:45)
+  noon_break:
+    enabled: true
+    time: "11:45"
+    mode: "noon_break"
+    description: "午间复盘和下午预判"
+  
+  # 下午开盘分析 (13:15)
+  afternoon_early:
+    enabled: true
+    time: "13:15"
+    mode: "afternoon_early"
+    description: "下午开盘走势分析"
+  
+  # 下午盘中分析 (14:15)
+  afternoon_mid:
+    enabled: true
+    time: "14:15"
+    mode: "afternoon_mid"
+    description: "下午盘中机会识别"
+  
+  # 尾盘分析 (14:45)
+  closing:
+    enabled: true
+    time: "14:45"
+    mode: "closing"
+    description: "尾盘30分钟分析"
+  
+  # 盘后分析 (15:15)
+  post_market:
+    enabled: true
+    time: "15:15"
+    mode: "post_market"
+    description: "全天复盘和明日预判"
+  
+  # 周末分析 (周六10:00)
+  weekend:
+    enabled: true
+    time: "10:00"
+    days: ["saturday"]
+    mode: "weekend"
+    description: "周线分析和下周策略"
+
+# 通用配置
+general:
+  max_stocks_to_analyze: 25
+  result_save_path: "analysis_results"
+  email_notification: false
+  notification_level: "important"  # all, important, critical

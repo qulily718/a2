@@ -25,7 +25,8 @@ wheels/
 
 # 项目特定
 cache/*.pkl
-results/*.csv
+results/
+analysis_results/
 backtests/*.csv
 backtests/*.json
 
