@@ -124,6 +124,9 @@ class StockFilter:
                 if hist_data.empty or len(hist_data) < self.config['min_trading_days']:
                     continue
                 
+                # 可选：获取市值仅用于展示（不再作为筛选条件）
+                market_cap = self._get_stock_market_cap(symbol, stock_data)
+                
                 # 详细技术分析
                 analysis_result = self._analyze_stock_technicals(hist_data, stock_data)
                 
@@ -146,6 +149,9 @@ class StockFilter:
                         'analysis_details': analysis_result,
                         'score_breakdown': breakdown
                     }
+                    # 添加市值信息（如果有）
+                    if market_cap is not None:
+                        stock_info['market_cap'] = round(market_cap, 1)
                     filtered_stocks.append(stock_info)
                     
             except Exception as e:
@@ -165,6 +171,88 @@ class StockFilter:
         else:
             logger.info(f"板块 {sector_code} 未找到符合策略的股票")
             return []
+    
+    def _get_stock_market_cap(self, symbol: str, stock_data: pd.Series = None) -> float:
+        """
+        获取股票市值（单位：亿元）
+        
+        Args:
+            symbol: 股票代码
+            stock_data: 股票数据Series（可能包含市值字段）
+            
+        Returns:
+            市值（亿元），如果获取失败返回 None
+        """
+        # 1. 先尝试从 stock_data 中获取
+        if stock_data is not None:
+            for col in stock_data.index:
+                col_lower = str(col).lower()
+                if any(kw in col_lower for kw in ['市值', 'market_cap', '总市值']):
+                    try:
+                        market_cap = pd.to_numeric(stock_data[col], errors='coerce')
+                        if pd.notna(market_cap) and market_cap > 0:
+                            # 如果数值很大（>10000），可能是"元"，需要转为"亿元"
+                            if market_cap > 10000:
+                                market_cap = market_cap / 1e8
+                            return float(market_cap)
+                    except Exception:
+                        pass
+        
+        # 2. 尝试从实时行情获取（AkShare spot_em 接口，带重试）
+        import time
+        for attempt in range(3):
+            try:
+                import akshare as ak
+                code = symbol.replace('.SS', '').replace('.SZ', '')
+                spot_df = ak.stock_zh_a_spot_em()
+                if spot_df is not None and not spot_df.empty:
+                    stock_row = spot_df[spot_df['代码'].astype(str) == str(code)]
+                    if not stock_row.empty:
+                        # 查找市值列（可能是"总市值"或"流通市值"）
+                        for col in ['总市值', '流通市值', 'market_cap']:
+                            if col in stock_row.columns:
+                                market_cap_raw = pd.to_numeric(stock_row[col].iloc[0], errors='coerce')
+                                if pd.notna(market_cap_raw) and market_cap_raw > 0:
+                                    # 单位判断：AkShare 的"总市值"通常是"元"，需要除以1e8转为"亿元"
+                                    # 如果数值 > 1000，很可能是"元"单位（因为A股最大市值也就几万亿，即几千亿）
+                                    # 如果数值 < 1000，可能是"亿元"单位
+                                    if market_cap_raw > 1000:
+                                        market_cap = market_cap_raw / 1e8  # 从元转为亿元
+                                    else:
+                                        market_cap = market_cap_raw  # 已经是亿元
+                                    
+                                    # 验证合理性：A股市值通常在几十亿到几万亿之间（即几十到几万）
+                                    if 10 <= market_cap <= 50000:  # 10亿到5万亿的合理范围
+                                        logger.debug(f"{symbol} 市值获取成功: {market_cap:.1f}亿（来源: spot_em, 列: {col}, 原始值: {market_cap_raw:.2f}）")
+                                        return float(market_cap)
+                                    else:
+                                        logger.warning(f"{symbol} 市值数值异常: {market_cap:.1f}亿（原始值: {market_cap_raw:.2f}），可能单位转换有误")
+                if attempt < 2:
+                    time.sleep(1)  # 重试前等待1秒
+            except Exception as e:
+                if attempt < 2:
+                    logger.debug(f"从实时行情获取 {symbol} 市值失败（第{attempt+1}次）: {e}，1秒后重试...")
+                    time.sleep(1)
+                else:
+                    logger.debug(f"从实时行情获取 {symbol} 市值失败（3次均失败）: {e}")
+        
+        # 3. 尝试用 easyquotation 获取（如果可用）
+        try:
+            import easyquotation
+            quotation = easyquotation.use('tencent')
+            code = symbol.replace('.SS', '').replace('.SZ', '')
+            eq_code = f"sh{code}" if symbol.endswith('.SS') else f"sz{code}"
+            quotes = quotation.stocks([eq_code])
+            if quotes and eq_code in quotes:
+                q = quotes[eq_code]
+                # easyquotation 可能没有市值字段，但可以尝试从其他字段推断
+                # 这里暂时跳过，因为 easyquotation 主要提供价格数据
+                pass
+        except Exception:
+            pass
+        
+        # 3. 如果都失败，返回 None（不强制要求市值，避免阻塞筛选）
+        return None
     
     def _pre_filter(self, stocks_df: pd.DataFrame) -> pd.DataFrame:
         """

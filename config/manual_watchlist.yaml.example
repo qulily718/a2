@@ -1,0 +1,21 @@
+# 手动股票列表配置文件（可选）
+# 如果已有结果文件，此文件不需要
+# 使用方法：复制此文件为 manual_watchlist.yaml，然后编辑股票列表
+
+watchlist:
+  - symbol: "601899.SS"    # 紫金矿业
+    name: "紫金矿业"
+    sector_name: "有色金属"
+  
+  - symbol: "600547.SS"    # 山东黄金
+    name: "山东黄金"
+    sector_name: "有色金属"
+  
+  - symbol: "002237.SZ"    # 恒邦股份
+    name: "恒邦股份"
+    sector_name: "有色金属"
+
+# 注意：
+# 1. symbol 格式：6位数字 + .SS（上海）或 .SZ（深圳）
+# 2. name 可选，如果不提供，系统会尝试从数据获取
+# 3. sector_name 可选，仅用于显示

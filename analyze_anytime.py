@@ -8,7 +8,7 @@ import pandas as pd
 from datetime import datetime, time
 import logging
 import glob
-from typing import List, Dict
+from typing import List, Dict, Optional, Any
 
 # 添加项目路径
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -85,7 +85,8 @@ def get_watchlist_from_file(results_dir: str = "results"):
                     'change_pct': float(row.get('change_pct', 0)) if pd.notna(row.get('change_pct')) else 0
                 })
         
-        return watchlist[:30]  # 限制数量
+        # 不截断，按文件内容全部加载（由调用方决定是否限制）
+        return watchlist
         
     except Exception as e:
         logger.error(f"加载文件失败: {e}")
@@ -135,7 +136,7 @@ def get_realtime_watchlist():
         return []
 
 
-def display_analysis_report(analysis_result: dict):
+def display_analysis_report(analysis_result: dict, watchlist: Optional[List[Dict[str, Any]]] = None):
     """显示分析报告"""
     mode_descriptions = {
         'morning_open': "开盘30分钟分析",
@@ -165,62 +166,120 @@ def display_analysis_report(analysis_result: dict):
     if recommendation:
         print(f"\n🎯 操作建议: {recommendation}")
     
-    # 显示详细结果
+    # 用 watchlist 补全价格/昨收等信息（用于解释涨跌来源）
+    watch_map: Dict[str, Dict[str, Any]] = {}
+    if watchlist:
+        for w in watchlist:
+            sym = str(w.get("symbol", "")).strip()
+            if sym:
+                watch_map[sym] = w
+
+    # 显示详细结果（不截断）
     if 'results' in analysis_result and analysis_result['results']:
-        print(f"\n📊 分析结果 (前{min(10, len(analysis_result['results']))}只):")
-        print("-"*80)
-        
-        for i, stock in enumerate(analysis_result['results'][:10], 1):
-            name = stock.get('name', stock.get('symbol', ''))
-            score = stock.get('score', stock.get('opportunity_score', 0))
-            change = stock.get('opening_change', stock.get('change_pct', 0))
-            signal = stock.get('signal', stock.get('trend', ''))
-            
-            print(f"{i:2d}. {name[:10]:<10} 评分: {score:>5.1f} 涨跌: {change:>6.2f}% 信号: {signal}")
+        results = analysis_result['results']
+        print(f"\n📊 分析结果（共{len(results)}只，不截断）：")
+        print("-"*110)
+        print(f"{'序号':>3}  {'代码':<10} {'名称':<12} {'评分':>6} {'现价':>8} {'昨收':>8} {'涨跌%':>8}  {'信号/备注'}")
+        print("-"*110)
+
+        for i, item in enumerate(results, 1):
+            symbol = str(item.get('symbol', '')).strip()
+            name = str(item.get('name', '')).strip() or symbol
+
+            # 分析分数
+            score = item.get('score', item.get('opportunity_score', 0))
+            try:
+                score = float(score)
+            except Exception:
+                score = 0.0
+
+            # 价格与涨跌：以上一交易日收盘价 vs 当前价（盘中“现价”只认实时行情）
+            ref = watch_map.get(symbol, {})
+            current_price = ref.get('price', ref.get('current_price', item.get('price', None)))
+            prev_close = ref.get('prev_close', item.get('prev_close', 0))
+            last_close = ref.get('last_close', item.get('last_close', None))
+            change_pct = ref.get('change_pct', item.get('change_pct', item.get('opening_change', 0)))
+            price_source = str(ref.get('price_source', 'unknown'))
+
+            def _fmt_num(x, width=8):
+                try:
+                    v = float(x)
+                    if pd.isna(v):
+                        return " " * (width - 3) + "N/A"
+                    return f"{v:>{width}.2f}"
+                except Exception:
+                    return " " * (width - 3) + "N/A"
+
+            def _fmt_pct(x, width=8):
+                try:
+                    v = float(x)
+                    if pd.isna(v):
+                        return " " * (width - 3) + "N/A"
+                    return f"{v:>{width}.2f}"
+                except Exception:
+                    return " " * (width - 3) + "N/A"
+
+            signal = item.get('signal', item.get('trend', ''))
+            note_parts = []
+            if prev_close not in (None, 0) and current_price is not None and not pd.isna(current_price):
+                note_parts.append("昨收→现价")
+            if price_source and price_source != "unknown":
+                note_parts.append(f"src={price_source}")
+            if (current_price is None or pd.isna(current_price)) and last_close is not None and not pd.isna(last_close):
+                note_parts.append(f"最近收盘={float(last_close):.2f}")
+            note = f" ({' | '.join(note_parts)})" if note_parts else ""
+            print(
+                f"{i:>3}  {symbol:<10} {name[:12]:<12} {score:>6.1f} "
+                f"{_fmt_num(current_price)} {_fmt_num(prev_close)} {_fmt_pct(change_pct)}  {signal}{note}"
+            )
     
     elif 'daily_summary' in analysis_result and analysis_result['daily_summary']:
         print(f"\n📋 股票分析汇总:")
         print("-"*80)
         
-        for i, stock in enumerate(analysis_result['daily_summary'][:10], 1):
-            name = stock.get('name', stock.get('symbol', ''))
+        for i, stock in enumerate(analysis_result['daily_summary'], 1):
+            symbol = str(stock.get('symbol', '')).strip()
+            name = stock.get('name', symbol)
             score = stock.get('score', 0)
             trend = stock.get('trend', '')
             
-            print(f"{i:2d}. {name[:12]:<12} 评分: {score:>5.1f} 趋势: {trend}")
+            print(f"{i:2d}. {symbol:<10} {str(name)[:12]:<12} 评分: {float(score):>5.1f} 趋势: {trend}")
     
     elif 'stock_analysis' in analysis_result and analysis_result['stock_analysis']:
         print(f"\n🔍 股票技术分析:")
         print("-"*80)
         
-        for i, stock in enumerate(analysis_result['stock_analysis'][:10], 1):
-            name = stock.get('name', stock.get('symbol', ''))
+        for i, stock in enumerate(analysis_result['stock_analysis'], 1):
+            symbol = str(stock.get('symbol', '')).strip()
+            name = stock.get('name', symbol)
             score = stock.get('score', 0)
             pattern = stock.get('pattern', '')
             
-            print(f"{i:2d}. {name[:12]:<12} 评分: {score:>5.1f} 形态: {pattern}")
+            print(f"{i:2d}. {symbol:<10} {str(name)[:12]:<12} 评分: {float(score):>5.1f} 形态: {pattern}")
     
     elif 'weekly_analysis' in analysis_result and analysis_result['weekly_analysis']:
         print(f"\n📅 周线分析:")
         print("-"*80)
         
-        for i, stock in enumerate(analysis_result['weekly_analysis'][:10], 1):
-            name = stock.get('name', stock.get('symbol', ''))
+        for i, stock in enumerate(analysis_result['weekly_analysis'], 1):
+            symbol = str(stock.get('symbol', '')).strip()
+            name = stock.get('name', symbol)
             score = stock.get('score', 0)
             pattern = stock.get('pattern', '')
             
-            print(f"{i:2d}. {name[:12]:<12} 评分: {score:>5.1f} 形态: {pattern}")
+            print(f"{i:2d}. {symbol:<10} {str(name)[:12]:<12} 评分: {float(score):>5.1f} 形态: {pattern}")
     
     elif 'morning_summary' in analysis_result and analysis_result['morning_summary']:
         print(f"\n🌅 上午表现汇总:")
         print("-"*80)
         
-        for i, stock in enumerate(analysis_result['morning_summary'][:10], 1):
-            name = stock.get('name', stock.get('symbol', ''))
+        for i, stock in enumerate(analysis_result['morning_summary'], 1):
+            symbol = str(stock.get('symbol', '')).strip()
+            name = stock.get('name', symbol)
             score = stock.get('score', 0)
             trend = stock.get('trend', '')
             
-            print(f"{i:2d}. {name[:12]:<12} 评分: {score:>5.1f} 趋势: {trend}")
+            print(f"{i:2d}. {symbol:<10} {str(name)[:12]:<12} 评分: {float(score):>5.1f} 趋势: {trend}")
     
     # 显示市场预测
     if 'afternoon_outlook' in analysis_result:
@@ -371,6 +430,42 @@ def update_realtime_data(watchlist: List[Dict], data_fetcher) -> List[Dict]:
     import akshare as ak
     
     updated_list = []
+
+    def _build_eq_code(symbol: str) -> str:
+        """easyquotation 常用代码格式：sh600000 / sz000001"""
+        code = symbol.replace('.SS', '').replace('.SZ', '')
+        if symbol.endswith('.SS'):
+            return f"sh{code}"
+        if symbol.endswith('.SZ'):
+            return f"sz{code}"
+        return code
+
+    # 1) 全市场实时行情（尽量一次请求）
+    realtime_df = None
+    try:
+        realtime_df = ak.stock_zh_a_spot_em()
+    except Exception:
+        realtime_df = None
+
+    # 2) easyquotation：无论 spot_em 成功与否，都提前批量取 watchlist 报价，用来兜底缺失项
+    eq_quotes: Dict[str, Any] = {}
+    try:
+        import easyquotation  # type: ignore
+
+        eq_codes_prefixed = [_build_eq_code(s.get('symbol', '')) for s in watchlist if s.get('symbol')]
+        eq_codes_prefixed = [c for c in eq_codes_prefixed if c]
+        eq_codes_digits = [c[2:] if c.startswith(("sh", "sz")) else c for c in eq_codes_prefixed]
+
+        # 先用 tencent（偏常用），若为空再尝试 sina
+        quotation = easyquotation.use('tencent')
+        if eq_codes_prefixed:
+            eq_quotes = quotation.stocks(eq_codes_prefixed) or {}
+        if not eq_quotes and eq_codes_digits:
+            quotation = easyquotation.use('sina')
+            eq_quotes = quotation.stocks(eq_codes_digits) or {}
+    except Exception as e:
+        logger.debug("easyquotation 获取失败: %s", e)
+        eq_quotes = {}
     
     for stock in watchlist:
         try:
@@ -378,23 +473,121 @@ def update_realtime_data(watchlist: List[Dict], data_fetcher) -> List[Dict]:
             # 转换股票代码格式（去掉后缀）
             code = symbol.replace('.SS', '').replace('.SZ', '')
             
-            # 获取实时数据
+            # 先用历史数据拿“昨收”（上一个交易日收盘价），用于解释涨跌来源
+            prev_close = None
+            hist_data = None
+            last_close = None
             try:
-                realtime_df = ak.stock_zh_a_spot_em()
-                stock_data = realtime_df[realtime_df['代码'] == code]
-                
+                # 用更稳健的 close 序列，避免盘中日线 close 被填充成昨收造成误解
+                hist_data = data_fetcher.get_stock_history(symbol, period='10d')
+                if hist_data is not None and not hist_data.empty and 'close' in hist_data.columns:
+                    # 确保索引是日期类型（用于按日期筛选）
+                    if not isinstance(hist_data.index, pd.DatetimeIndex):
+                        try:
+                            hist_data.index = pd.to_datetime(hist_data.index)
+                        except Exception:
+                            pass
+                    
+                    closes = pd.to_numeric(hist_data['close'], errors='coerce').dropna()
+                    if len(closes) >= 1:
+                        today = pd.Timestamp(datetime.now().date())
+                        is_date_index = isinstance(hist_data.index, pd.DatetimeIndex)
+                        
+                        # 获取最新收盘价和日期
+                        last_close = float(closes.iloc[-1])
+                        last_date = hist_data.index[-1] if is_date_index else None
+                        stock['last_close'] = last_close
+                        stock['last_close_date'] = last_date.strftime('%Y-%m-%d') if is_date_index and last_date else 'N/A'
+                        
+                        # 计算"昨收"：今天之前最近一个交易日的收盘价
+                        if is_date_index:
+                            # 筛选今天之前的数据（不包括今天）
+                            before_today = hist_data[hist_data.index < today]
+                            if not before_today.empty and 'close' in before_today.columns:
+                                prev_closes = pd.to_numeric(before_today['close'], errors='coerce').dropna()
+                                if len(prev_closes) >= 1:
+                                    prev_close = float(prev_closes.iloc[-1])
+                                    prev_date = before_today.index[-1]
+                                    stock['prev_close'] = prev_close
+                                    stock['prev_close_date'] = prev_date.strftime('%Y-%m-%d')
+                                    logger.debug(f"{symbol} 昨收: {prev_close:.2f} (日期: {prev_date.strftime('%Y-%m-%d')})")
+                        else:
+                            # 如果索引不是日期，回退到简单逻辑：取倒数第二个（如果有）
+                            if len(closes) >= 2:
+                                prev_close = float(closes.iloc[-2])
+                                stock['prev_close'] = prev_close
+                                stock['prev_close_date'] = 'N/A (非日期索引)'
+            except Exception as e:
+                logger.debug(f"计算昨收失败 {symbol}: {e}")
+                pass
+
+            # 再尝试用实时数据拿“现价”
+            current_price = None
+            # 2.1 先用 spot_em（若可用）
+            if realtime_df is not None and not realtime_df.empty and '代码' in realtime_df.columns:
+                stock_data = realtime_df[realtime_df['代码'].astype(str) == str(code)]
                 if not stock_data.empty:
                     row = stock_data.iloc[0]
-                    stock['price'] = float(row.get('最新价', stock.get('price', 0)))
-                    stock['change_pct'] = float(row.get('涨跌幅', stock.get('change_pct', 0)))
-            except Exception as e:
-                # 如果实时数据获取失败，尝试使用历史数据
-                hist_data = data_fetcher.get_stock_history(symbol, period='5d')
-                if hist_data is not None and len(hist_data) >= 2:
-                    today_close = hist_data['close'].iloc[-1]
-                    yesterday_close = hist_data['close'].iloc[-2]
-                    stock['change_pct'] = (today_close / yesterday_close - 1) * 100
-                    stock['price'] = today_close
+                    v = pd.to_numeric(row.get('最新价', None), errors='coerce')
+                    if v is not None and not pd.isna(v):
+                        current_price = float(v)
+                        stock['price'] = current_price  # 现价（实时）
+                        stock['price_source'] = 'spot'
+
+            # 2.2 spot_em 失败/缺失 -> easyquotation 兜底
+            if current_price is None:
+                eq_code = _build_eq_code(symbol)
+                q = None
+                if isinstance(eq_quotes, dict):
+                    q = eq_quotes.get(eq_code) or eq_quotes.get(code) or eq_quotes.get(eq_code[2:]) or eq_quotes.get(eq_code.upper())
+                if isinstance(q, dict):
+                    raw_now = q.get('now', q.get('price', q.get('current', q.get('last', None))))
+                    v = pd.to_numeric(raw_now, errors='coerce')
+                    if v is not None and not pd.isna(v):
+                        current_price = float(v)
+                        stock['price'] = current_price
+                        stock['price_source'] = 'easyquotation'
+                        # 若昨收缺失，尝试从报价里拿 close
+                        if prev_close is None:
+                            raw_close = q.get('close', q.get('yesterday_close', q.get('pre_close', None)))
+                            c = pd.to_numeric(raw_close, errors='coerce')
+                            if c is not None and not pd.isna(c):
+                                prev_close = float(c)
+                                stock['prev_close'] = prev_close
+
+            # 2.3 再兜底：分钟线（个股请求，有时比 spot_em 稳）
+            if current_price is None:
+                try:
+                    df_min = ak.stock_zh_a_hist_min_em(
+                        symbol=code,
+                        period="1",
+                        start_date=datetime.now().strftime("%Y%m%d"),
+                        end_date=datetime.now().strftime("%Y%m%d"),
+                        adjust="",
+                    )
+                    if df_min is not None and not df_min.empty:
+                        last = df_min.iloc[-1]
+                        v = pd.to_numeric(last.get("收盘", None), errors="coerce")
+                        if v is not None and not pd.isna(v):
+                            current_price = float(v)
+                            stock['price'] = current_price
+                            stock['price_source'] = 'min1'
+                except Exception:
+                    pass
+
+            if current_price is None:
+                stock['price'] = None
+                stock['price_source'] = 'unavailable'
+
+            # 统一按“昨收→现价”计算涨跌幅（更清晰）
+            if current_price is not None and prev_close is not None and prev_close > 0:
+                stock['change_pct'] = (current_price / prev_close - 1) * 100
+                src = stock.get('price_source', 'unknown')
+                stock['change_source'] = f"prev_close_vs_{src}"
+            else:
+                # 盘中拿不到实时价时，不用“最近收盘”冒充“现价”，避免看起来现价=昨收
+                stock['change_pct'] = None
+                stock['change_source'] = 'unavailable'
                     
             updated_list.append(stock)
             
@@ -442,16 +635,19 @@ def main():
         watchlist = update_realtime_data(watchlist, data_fetcher)
         print(f"✅ 已更新 {len(watchlist)} 只股票的实时数据")
     
-    # 3. 根据当前时间进行分析
+    # 3. 根据当前时间进行分析（使用 try/finally 确保 BaoStock 连接关闭）
     mode_name = time_analyzer.current_mode.replace('_', ' ')
     print(f"\n3. 开始{mode_name}...")
-    analysis_result = time_analyzer.analyze_current_market(watchlist)
-    
-    # 4. 显示分析报告
-    display_analysis_report(analysis_result)
-    
-    # 5. 保存结果
-    save_analysis_result(analysis_result)
+    try:
+        analysis_result = time_analyzer.analyze_current_market(watchlist)
+        
+        # 4. 显示分析报告
+        display_analysis_report(analysis_result, watchlist=watchlist)
+        
+        # 5. 保存结果
+        save_analysis_result(analysis_result)
+    finally:
+        data_fetcher.close()  # 批量处理完成后关闭 BaoStock 连接
     
     print("\n" + "="*100)
     print("✅ 分析完成!")

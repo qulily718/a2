@@ -52,86 +52,100 @@ class OptimizedDynamicSectorAnalyzer:
         """
         获取实时板块数据（直接从AKShare获取带实时指标的数据）
         这是关键函数，直接使用显示的86个板块数据
+        增强版：添加重试机制和降级策略
         """
         logger.info("获取实时板块数据...")
         
-        try:
-            # 使用AKShare获取板块实时数据
-            sector_df = ak.stock_board_industry_name_em()
-            
-            if sector_df is None or sector_df.empty:
-                logger.error("无法获取板块实时数据")
-                return pd.DataFrame()
-            
-            # 显示获取到的列名（调试用）
-            logger.debug(f"板块数据列名: {list(sector_df.columns)}")
-            logger.debug(f"获取到 {len(sector_df)} 个板块")
-            
-            # 标准化列名（确保一致性）
-            column_mapping = {}
-            for col in sector_df.columns:
-                col_str = str(col)
-                if '板块名称' in col_str or '名称' in col_str:
-                    column_mapping['sector_name'] = col
-                elif '板块代码' in col_str or '代码' in col_str:
-                    column_mapping['sector_code'] = col
-                elif '最新价' in col_str:
-                    column_mapping['price'] = col
-                elif '涨跌幅' in col_str or '涨跌额' in col_str:
-                    column_mapping['change_pct'] = col
-                elif '上涨家数' in col_str:
-                    column_mapping['up_count'] = col
-                elif '下跌家数' in col_str:
-                    column_mapping['down_count'] = col
-                elif '总市值' in col_str:
-                    column_mapping['total_market_cap'] = col
-                elif '换手率' in col_str:
-                    column_mapping['turnover_rate'] = col
-                elif '领涨股票-涨跌幅' in col_str:
-                    column_mapping['leader_change_pct'] = col
-            
-            # 创建标准化的DataFrame
-            processed_data = pd.DataFrame()
-            
-            # 复制必要字段
-            for new_col, old_col in column_mapping.items():
-                if old_col in sector_df.columns:
-                    processed_data[new_col] = sector_df[old_col]
-            
-            # 确保有板块名称和代码
-            if 'sector_name' not in processed_data.columns and len(sector_df.columns) > 1:
-                processed_data['sector_name'] = sector_df.iloc[:, 1]
-            
-            if 'sector_code' not in processed_data.columns:
-                processed_data['sector_code'] = processed_data['sector_name']
-            
-            # 数据清洗和类型转换
-            numeric_columns = ['price', 'change_pct', 'up_count', 'down_count', 
-                              'total_market_cap', 'turnover_rate', 'leader_change_pct']
-            
-            for col in numeric_columns:
-                if col in processed_data.columns:
-                    processed_data[col] = pd.to_numeric(processed_data[col], errors='coerce')
-            
-            # 计算额外指标
-            if 'up_count' in processed_data.columns and 'down_count' in processed_data.columns:
-                processed_data['total_count'] = processed_data['up_count'] + processed_data['down_count']
-                processed_data['up_ratio'] = (processed_data['up_count'] / processed_data['total_count'] * 100).round(1)
-            
-            # 风险评估
-            processed_data['risk_level'] = processed_data['sector_name'].apply(self._assess_risk_level)
-            
-            # 板块类型分类
-            processed_data['sector_category'] = processed_data['sector_name'].apply(self._categorize_sector)
-            
-            logger.info(f"成功获取 {len(processed_data)} 个板块的实时数据")
-            return processed_data
-            
-        except Exception as e:
-            logger.error(f"获取实时板块数据失败: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return pd.DataFrame()
+        import time
+        
+        # 重试3次，每次间隔递增
+        for attempt in range(3):
+            try:
+                # 使用AKShare获取板块实时数据
+                sector_df = ak.stock_board_industry_name_em()
+                
+                if sector_df is not None and not sector_df.empty:
+                    logger.info(f"✅ 成功获取板块数据（第{attempt+1}次尝试），共 {len(sector_df)} 个板块")
+                    
+                    # 显示获取到的列名（调试用）
+                    logger.debug(f"板块数据列名: {list(sector_df.columns)}")
+                    logger.debug(f"获取到 {len(sector_df)} 个板块")
+                    
+                    # 标准化列名（确保一致性）
+                    column_mapping = {}
+                    for col in sector_df.columns:
+                        col_str = str(col)
+                        if '板块名称' in col_str or '名称' in col_str:
+                            column_mapping['sector_name'] = col
+                        elif '板块代码' in col_str or '代码' in col_str:
+                            column_mapping['sector_code'] = col
+                        elif '最新价' in col_str:
+                            column_mapping['price'] = col
+                        elif '涨跌幅' in col_str or '涨跌额' in col_str:
+                            column_mapping['change_pct'] = col
+                        elif '上涨家数' in col_str:
+                            column_mapping['up_count'] = col
+                        elif '下跌家数' in col_str:
+                            column_mapping['down_count'] = col
+                        elif '总市值' in col_str:
+                            column_mapping['total_market_cap'] = col
+                        elif '换手率' in col_str:
+                            column_mapping['turnover_rate'] = col
+                        elif '领涨股票-涨跌幅' in col_str:
+                            column_mapping['leader_change_pct'] = col
+                    
+                    # 创建标准化的DataFrame
+                    processed_data = pd.DataFrame()
+                    
+                    # 复制必要字段
+                    for new_col, old_col in column_mapping.items():
+                        if old_col in sector_df.columns:
+                            processed_data[new_col] = sector_df[old_col]
+                    
+                    # 确保有板块名称和代码
+                    if 'sector_name' not in processed_data.columns and len(sector_df.columns) > 1:
+                        processed_data['sector_name'] = sector_df.iloc[:, 1]
+                    
+                    if 'sector_code' not in processed_data.columns:
+                        processed_data['sector_code'] = processed_data['sector_name']
+                    
+                    # 数据清洗和类型转换
+                    numeric_columns = ['price', 'change_pct', 'up_count', 'down_count', 
+                                      'total_market_cap', 'turnover_rate', 'leader_change_pct']
+                    
+                    for col in numeric_columns:
+                        if col in processed_data.columns:
+                            processed_data[col] = pd.to_numeric(processed_data[col], errors='coerce')
+                    
+                    # 计算额外指标
+                    if 'up_count' in processed_data.columns and 'down_count' in processed_data.columns:
+                        processed_data['total_count'] = processed_data['up_count'] + processed_data['down_count']
+                        processed_data['up_ratio'] = (processed_data['up_count'] / processed_data['total_count'] * 100).round(1)
+                    
+                    # 风险评估
+                    processed_data['risk_level'] = processed_data['sector_name'].apply(self._assess_risk_level)
+                    
+                    # 板块类型分类
+                    processed_data['sector_category'] = processed_data['sector_name'].apply(self._categorize_sector)
+                    
+                    logger.info(f"成功处理 {len(processed_data)} 个板块的实时数据")
+                    return processed_data
+                else:
+                    logger.warning(f"板块数据返回空（第{attempt+1}次尝试）")
+            except Exception as e:
+                error_msg = str(e)
+                if attempt < 2:
+                    wait_time = (attempt + 1) * 3  # 3秒、6秒
+                    logger.warning(f"获取板块数据失败（第{attempt+1}次）: {error_msg[:100]}，{wait_time}秒后重试...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"获取板块数据失败（3次均失败）: {error_msg[:100]}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+        
+        # 所有重试都失败
+        logger.error("无法获取板块实时数据（所有重试均失败）")
+        return pd.DataFrame()
     
     def _assess_risk_level(self, sector_name: str) -> str:
         """评估板块风险等级"""

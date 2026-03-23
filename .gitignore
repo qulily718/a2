@@ -27,6 +27,7 @@ wheels/
 cache/*.pkl
 results/
 analysis_results/
+monitor_results/
 backtests/*.csv
 backtests/*.json
 

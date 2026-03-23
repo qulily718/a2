@@ -42,6 +42,12 @@ class OpenMarketMonitor:
         self.config = base
 
         self.monitor_data: Dict[str, Dict[str, Any]] = {}
+        self._spot_df_cache: Optional[pd.DataFrame] = None  # 缓存全市场实时行情（避免重复请求）
+        self._spot_df_cache_time: Optional[datetime] = None
+        self._spot_df_cache_ttl = 10  # 缓存有效期（秒）
+        # 初始化时就创建数据获取器，确保整个监控过程使用同一个实例（BaoStock连接复用）
+        from src.data.data_fetcher import ShortTermDataFetcher
+        self._data_fetcher = ShortTermDataFetcher(use_cache=True, rate_limit=0.1)
 
     def start_monitoring(self, start_time: Optional[datetime] = None) -> Dict[str, Any]:
         """
@@ -86,6 +92,14 @@ class OpenMarketMonitor:
         print("\n" + "=" * 90)
         print("开盘监控结束，生成买入决策")
         print("=" * 90)
+        
+        # 关闭数据获取器连接（如果有）
+        if self._data_fetcher is not None:
+            try:
+                self._data_fetcher.close()
+            except Exception:
+                pass
+        
         return self._generate_final_decisions()
 
     def _update_all_stocks(self) -> None:
@@ -108,7 +122,32 @@ class OpenMarketMonitor:
     def _update_stock_data(self, symbol: str) -> None:
         realtime = self._get_realtime_data(symbol)
         if realtime is None:
-            return
+            # 如果实时数据完全失败，至少尝试用历史数据填充基本信息
+            logger.debug("实时数据获取失败，尝试用历史数据填充 %s", symbol)
+            try:
+                hist = self._data_fetcher.get_stock_history(symbol, period="5d")
+                if not hist.empty and len(hist) >= 1:
+                    latest = hist.iloc[-1]
+                    current_price = float(pd.to_numeric(latest.get("close", np.nan), errors="coerce"))
+                    change_pct = np.nan
+                    if len(hist) >= 2:
+                        yesterday_close = float(pd.to_numeric(hist['close'].iloc[-2], errors="coerce"))
+                        if not pd.isna(current_price) and not pd.isna(yesterday_close) and yesterday_close > 0:
+                            change_pct = (current_price / yesterday_close - 1) * 100
+                    volume = float(pd.to_numeric(latest.get("volume", np.nan), errors="coerce"))
+                    
+                    # 使用历史数据填充（至少能显示价格和涨跌幅）
+                    realtime = {
+                        "current_price": current_price,
+                        "change_pct": change_pct,
+                        "volume": volume,
+                    }
+                    logger.info("使用历史数据填充 %s: 价格=%.2f, 涨跌幅=%.2f%%", symbol, current_price, change_pct if not pd.isna(change_pct) else 0)
+                else:
+                    return  # 历史数据也失败，跳过
+            except Exception as e:
+                logger.warning("历史数据降级也失败 %s: %s", symbol, e)
+                return
 
         current_price = float(realtime.get("current_price", np.nan))
         volume = float(realtime.get("volume", np.nan))
@@ -133,33 +172,100 @@ class OpenMarketMonitor:
         """
         获取实时行情数据。
         优先用“全市场实时行情”筛选目标股票（一次请求），避免每只股票单独请求。
+        添加重试机制和降级策略。
         """
         code = symbol.replace(".SS", "").replace(".SZ", "")
-        try:
-            df = ak.stock_zh_a_spot_em()
-            if df is not None and not df.empty:
-                # 兼容列名
-                code_col = "代码" if "代码" in df.columns else df.columns[1]
-                row = df[df[code_col].astype(str) == str(code)]
+        
+        # 1. 尝试从缓存获取全市场实时行情（避免重复请求）
+        now = datetime.now()
+        if (self._spot_df_cache is None or 
+            self._spot_df_cache_time is None or 
+            (now - self._spot_df_cache_time).total_seconds() > self._spot_df_cache_ttl):
+            # 缓存过期或不存在，重新获取（带重试）
+            for attempt in range(3):
+                try:
+                    self._spot_df_cache = ak.stock_zh_a_spot_em()
+                    if self._spot_df_cache is not None and not self._spot_df_cache.empty:
+                        self._spot_df_cache_time = now
+                        break
+                except Exception as e:
+                    if attempt < 2:
+                        logger.debug("stock_zh_a_spot_em 获取失败(第%d次): %s", attempt + 1, e)
+                        ttime.sleep(0.5 * (attempt + 1))  # 简单退避
+                    else:
+                        logger.warning("stock_zh_a_spot_em 获取失败(3次均失败): %s", e)
+                        self._spot_df_cache = None
+        
+        # 2. 从缓存中查找目标股票
+        if self._spot_df_cache is not None and not self._spot_df_cache.empty:
+            try:
+                code_col = "代码" if "代码" in self._spot_df_cache.columns else self._spot_df_cache.columns[1]
+                row = self._spot_df_cache[self._spot_df_cache[code_col].astype(str) == str(code)]
                 if not row.empty:
                     r0 = row.iloc[0]
                     # 常见列名
                     def _get(col_cn: str, fallback: float = np.nan) -> float:
                         return float(pd.to_numeric(r0.get(col_cn, fallback), errors="coerce"))
 
+                    change_pct = _get("涨跌幅")
+                    current_price = _get("最新价")
+                    
+                    # 如果涨跌幅是 nan，尝试用当前价和今开价计算
+                    if pd.isna(change_pct) and not pd.isna(current_price):
+                        open_price = _get("今开")
+                        if not pd.isna(open_price) and open_price > 0:
+                            # 用当前价相对今开价计算（近似涨跌幅）
+                            change_pct = (current_price / open_price - 1) * 100
+
                     return {
-                        "current_price": _get("最新价"),
-                        "change_pct": _get("涨跌幅"),
+                        "current_price": current_price,
+                        "change_pct": change_pct,
                         "volume": _get("成交量"),
                         "amount": _get("成交额"),
                         "open": _get("今开"),
                         "high": _get("最高"),
                         "low": _get("最低"),
                     }
-        except Exception as e:
-            logger.debug("stock_zh_a_spot_em 获取失败 %s: %s", symbol, e)
+            except Exception as e:
+                logger.debug("从缓存解析股票 %s 数据失败: %s", symbol, e)
 
-        # 备用：分钟线（会更慢，尽量少用）
+        # 3. 降级策略：直接从历史数据获取最新价格和涨跌幅
+        # 如果实时数据完全失败，使用历史数据（BaoStock 作为备选）
+        try:
+            # 获取最近几天的历史数据（用于计算涨跌幅）
+            hist = self._data_fetcher.get_stock_history(symbol, period="5d")
+            if not hist.empty and len(hist) >= 1:
+                # 使用最新一条数据的收盘价作为当前价格（近似）
+                latest = hist.iloc[-1]
+                current_price = float(pd.to_numeric(latest.get("close", np.nan), errors="coerce"))
+                
+                # 计算涨跌幅：相对于昨日收盘
+                change_pct = np.nan
+                if len(hist) >= 2:
+                    yesterday_close = float(pd.to_numeric(hist['close'].iloc[-2], errors="coerce"))
+                    if not pd.isna(current_price) and not pd.isna(yesterday_close) and yesterday_close > 0:
+                        change_pct = (current_price / yesterday_close - 1) * 100
+                        logger.debug("从历史数据计算 %s 涨跌幅: %.2f%% (当前价: %.2f, 昨收: %.2f)", 
+                                   symbol, change_pct, current_price, yesterday_close)
+                
+                # 获取成交量（如果有）
+                volume = float(pd.to_numeric(latest.get("volume", np.nan), errors="coerce"))
+                
+                if not pd.isna(current_price):
+                    logger.info("使用历史数据作为 %s 的实时数据（实时接口失败）", symbol)
+                    return {
+                        "current_price": current_price,
+                        "change_pct": change_pct,
+                        "volume": volume,
+                        "amount": float(pd.to_numeric(latest.get("amount", np.nan), errors="coerce")),
+                        "open": float(pd.to_numeric(latest.get("open", np.nan), errors="coerce")),
+                        "high": float(pd.to_numeric(latest.get("high", np.nan), errors="coerce")),
+                        "low": float(pd.to_numeric(latest.get("low", np.nan), errors="coerce")),
+                    }
+        except Exception as e:
+            logger.warning("降级到历史数据失败 %s: %s", symbol, e)
+
+        # 4. 最后尝试：分钟线（如果历史数据也失败）
         try:
             df_min = ak.stock_zh_a_hist_min_em(
                 symbol=code,
@@ -170,9 +276,23 @@ class OpenMarketMonitor:
             )
             if df_min is not None and not df_min.empty:
                 last = df_min.iloc[-1]
-                close = float(pd.to_numeric(last.get("收盘", np.nan), errors="coerce"))
+                current_price = float(pd.to_numeric(last.get("收盘", np.nan), errors="coerce"))
                 vol = float(pd.to_numeric(last.get("成交量", np.nan), errors="coerce"))
-                return {"current_price": close, "change_pct": np.nan, "volume": vol}
+                
+                # 尝试计算涨跌幅：从历史数据获取昨日收盘价
+                change_pct = np.nan
+                if not pd.isna(current_price):
+                    try:
+                        hist = self._data_fetcher.get_stock_history(symbol, period="5d")
+                        if not hist.empty and len(hist) >= 2:
+                            yesterday_close = hist['close'].iloc[-2]  # 昨日收盘
+                            if not pd.isna(yesterday_close) and yesterday_close > 0:
+                                change_pct = (current_price / yesterday_close - 1) * 100
+                                logger.debug("从分钟线+历史数据计算 %s 涨跌幅: %.2f%%", symbol, change_pct)
+                    except Exception as e:
+                        logger.debug("计算涨跌幅失败 %s: %s", symbol, e)
+                
+                return {"current_price": current_price, "change_pct": change_pct, "volume": vol}
         except Exception as e:
             logger.debug("分钟线备用接口失败 %s: %s", symbol, e)
 
@@ -318,7 +438,14 @@ class OpenMarketMonitor:
             sig_text = ", ".join(sigs[:3])
             decision = d.get("decision", "pending")
             decision_text = {"positive": "考虑", "watch": "观察", "negative": "放弃"}.get(decision, "观察")
-            print(f"{name:<10} {price:>8.2f} {chg:>7.2f}% {len(sigs):>4}  {sig_text:<45} {decision_text:<8}")
+            
+            # 格式化涨跌幅显示
+            if pd.isna(chg):
+                chg_str = "  N/A"
+            else:
+                chg_str = f"{chg:>6.2f}%"
+            
+            print(f"{name:<10} {price:>8.2f} {chg_str:>7} {len(sigs):>4}  {sig_text:<45} {decision_text:<8}")
 
         print("-" * 90)
         print(f"决策规则：≥{self.config.required_signals} 信号=考虑；1 信号=观察；0 信号=放弃")

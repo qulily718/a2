@@ -373,9 +373,12 @@ def main():
     data_fetcher = ShortTermDataFetcher(use_cache=True, rate_limit=0.3)
     analyzer = StockTrendAnalyzer(data_fetcher)
     
-    # 3. 分析趋势
+    # 3. 分析趋势（使用 try/finally 确保 BaoStock 连接关闭）
     print("\n3. 分析股票趋势（基于历史K线数据）...")
-    results_df = analyzer.analyze_watchlist(watchlist, period="1mo")
+    try:
+        results_df = analyzer.analyze_watchlist(watchlist, period="1mo")
+    finally:
+        data_fetcher.close()  # 批量处理完成后关闭 BaoStock 连接
     
     # 4. 显示报告
     display_trend_report(results_df)
@@ -412,15 +415,18 @@ if __name__ == "__main__":
             print(f"使用指定的股票代码: {len(watchlist)} 只")
             data_fetcher = ShortTermDataFetcher(use_cache=True, rate_limit=0.3)
             analyzer = StockTrendAnalyzer(data_fetcher)
-            results_df = analyzer.analyze_watchlist(watchlist, period=args.period)
-            display_trend_report(results_df)
-            
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_file = f"results/trend_analysis_{timestamp}.csv"
-            success_df = results_df[results_df['status'] == 'success']
-            if not success_df.empty:
-                success_df.to_csv(output_file, index=False, encoding='utf-8-sig')
-                print(f"\n💾 结果已保存: {output_file}")
+            try:
+                results_df = analyzer.analyze_watchlist(watchlist, period=args.period)
+                display_trend_report(results_df)
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_file = f"results/trend_analysis_{timestamp}.csv"
+                success_df = results_df[results_df['status'] == 'success']
+                if not success_df.empty:
+                    success_df.to_csv(output_file, index=False, encoding='utf-8-sig')
+                    print(f"\n💾 结果已保存: {output_file}")
+            finally:
+                data_fetcher.close()  # 确保关闭 BaoStock 连接
         else:
             print("❌ 无效的股票代码")
     else:

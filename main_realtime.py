@@ -264,8 +264,37 @@ def main():
         sector_data = sector_analyzer.get_real_time_sector_data()
         
         if sector_data.empty:
-            print("❌ 无法获取板块数据，请检查网络连接")
-            return
+            print("❌ 无法获取板块数据（AkShare接口不稳定）")
+            print("\n💡 降级方案：尝试使用已有结果文件...")
+            
+            # 降级策略：使用已有的结果文件
+            import glob
+            import os
+            results_dir = "results"
+            if os.path.exists(results_dir):
+                patterns = ["simple_recommendations_*.csv", "recommendations_*.csv", "recommended_stocks_*.csv"]
+                files = []
+                for pattern in patterns:
+                    files.extend(glob.glob(os.path.join(results_dir, pattern)))
+                
+                if files:
+                    latest_file = max(files, key=os.path.getctime)
+                    logger.info(f"使用已有结果文件: {os.path.basename(latest_file)}")
+                    print(f"✅ 找到已有结果: {os.path.basename(latest_file)}")
+                    print("\n💡 建议：")
+                    print("  1. 直接使用 analyze_anytime.py 分析已有结果")
+                    print("  2. 或等待网络恢复后重新运行")
+                    return
+                else:
+                    print("❌ 未找到已有结果文件")
+                    print("\n💡 建议：")
+                    print("  1. 等待网络恢复后重新运行")
+                    print("  2. 或使用 analyze_anytime.py 分析已有结果（如果有）")
+                    return
+            else:
+                print("❌ 结果目录不存在，且无法获取板块数据")
+                print("\n💡 建议：等待网络恢复或使用其他数据源")
+                return
         
         # 4. 获取最强板块
         top_sectors = sector_analyzer.get_top_sectors(sector_data, top_n=5)
@@ -295,6 +324,7 @@ def main():
         print(traceback.format_exc())
         
     finally:
+        data_fetcher.close()  # 确保关闭 BaoStock 连接
         print("\n" + "="*80)
         print("✅ 分析完成！")
         print("="*80)

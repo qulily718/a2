@@ -7,6 +7,12 @@ from datetime import datetime, timedelta
 import time
 from typing import Optional, List, Dict
 import logging
+import random
+
+try:
+    import baostock as bs  # type: ignore
+except Exception:
+    bs = None  # Optional dependency
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +28,7 @@ class ShortTermDataFetcher:
         self.use_cache = use_cache
         self.rate_limit = rate_limit
         self.last_request_time = 0
+        self.bs_logged_in = False  # BaoStock 连接状态（用于连接复用）
         
     def _rate_limit_check(self):
         """简单的速率控制"""
@@ -30,6 +37,118 @@ class ShortTermDataFetcher:
         if elapsed < self.rate_limit:
             time.sleep(self.rate_limit - elapsed)
         self.last_request_time = time.time()
+
+    def _sleep_backoff(self, attempt: int, base: float = 0.8, cap: float = 8.0) -> None:
+        """指数退避（带抖动），用于网络/上游偶发断连."""
+        delay = min(cap, base * (2 ** attempt))
+        delay = delay * (0.75 + random.random() * 0.5)  # jitter: 0.75~1.25
+        time.sleep(delay)
+
+    def _symbol_to_baostock_code(self, symbol: str) -> str:
+        """000001.SZ -> sz.000001; 600519.SS -> sh.600519"""
+        code = symbol.replace(".SS", "").replace(".SZ", "").strip()
+        if symbol.endswith(".SS") or code.startswith("6"):
+            return f"sh.{code}"
+        return f"sz.{code}"
+
+    def _ensure_bs_login(self, force_reconnect: bool = False) -> bool:
+        """
+        确保 BaoStock 已登录（连接复用，避免每只股票都 login/logout）
+        Args:
+            force_reconnect: 强制重新登录（用于连接失效时）
+        Returns:
+            True 如果已登录或登录成功，False 如果登录失败
+        """
+        if bs is None:
+            return False
+        
+        if force_reconnect:
+            self.bs_logged_in = False
+        
+        if self.bs_logged_in:
+            return True
+        
+        login = bs.login()
+        if login.error_code == "0":
+            self.bs_logged_in = True
+            logger.info("BaoStock 登录成功（连接复用）")
+            return True
+        else:
+            logger.warning("BaoStock 登录失败: %s %s", login.error_code, login.error_msg)
+            return False
+
+    def _fetch_history_baostock(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        使用 BaoStock 获取日线（前复权由策略侧处理；这里提供原始日线/成交量）。
+        返回列：open/high/low/close/volume/amount，index 为 datetime。
+        注意：使用连接复用，不会自动 logout（批量处理时更高效）
+        """
+        if not self._ensure_bs_login():
+            return pd.DataFrame()
+
+        bs_code = self._symbol_to_baostock_code(symbol)
+        # 注意：BaoStock 的 volume 通常是"手"，amount 是"元"
+        rs = bs.query_history_k_data_plus(
+            bs_code,
+            "date,open,high,low,close,volume,amount",
+            start_date=start_date,
+            end_date=end_date,
+            frequency="d",
+            adjustflag="2",  # 2: 不复权（更稳）；复权可在策略侧处理
+        )
+        if rs.error_code != "0":
+            # 如果是"用户未登录"错误，尝试重新登录并重试一次
+            if rs.error_code == "10001001":
+                logger.warning("BaoStock 连接失效，尝试重新登录...")
+                if self._ensure_bs_login(force_reconnect=True):
+                    # 重试查询
+                    rs = bs.query_history_k_data_plus(
+                        bs_code,
+                        "date,open,high,low,close,volume,amount",
+                        start_date=start_date,
+                        end_date=end_date,
+                        frequency="d",
+                        adjustflag="2",
+                    )
+                    if rs.error_code != "0":
+                        logger.warning("BaoStock 查询失败 %s (重试后): %s %s", symbol, rs.error_code, rs.error_msg)
+                        return pd.DataFrame()
+                else:
+                    logger.warning("BaoStock 重新登录失败，无法查询 %s", symbol)
+                    return pd.DataFrame()
+            else:
+                logger.warning("BaoStock 查询失败 %s: %s %s", symbol, rs.error_code, rs.error_msg)
+                return pd.DataFrame()
+
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows, columns=[c.strip() for c in rs.fields])
+        # 类型转换
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        for c in ["open", "high", "low", "close", "volume", "amount"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+        df = df.dropna(subset=["date"]).set_index("date").sort_index()
+        df = df.rename(columns={"date": "dt"})
+        df = df[["open", "high", "low", "close", "volume", "amount"]]
+        return df
+
+    def close(self):
+        """
+        关闭 BaoStock 连接（批量处理完成后调用，确保资源释放）
+        建议在批量处理时使用 try/finally 确保调用
+        """
+        if self.bs_logged_in and bs is not None:
+            try:
+                bs.logout()
+                self.bs_logged_in = False
+                logger.info("BaoStock 连接已关闭")
+            except Exception as e:
+                logger.warning("关闭 BaoStock 连接时出错: %s", e)
     
     def debug_print_all_sectors(self):
         """打印AKShare支持的所有行业板块名称（用于调试）"""
@@ -167,120 +286,76 @@ class ShortTermDataFetcher:
         return result
 
     def _try_fetch_sector_data(self, sector_name: str):
-        """尝试获取板块数据的内部函数，包含异常捕获"""
+        """尝试获取板块数据的内部函数，包含重试机制和异常捕获"""
+        import time
+        
+        # 重试3次，每次间隔递增
+        for attempt in range(3):
+            try:
+                self._rate_limit_check()
+                # 这是获取行业成分股的正确接口
+                result = ak.stock_board_industry_cons_em(symbol=sector_name)
+                if result is not None and not result.empty:
+                    return result
+                else:
+                    logger.debug(f"板块 '{sector_name}' 返回空数据（第{attempt+1}次）")
+            except Exception as e:
+                error_msg = str(e)
+                # 如果是连接错误，等待更长时间
+                if attempt < 2:
+                    wait_time = (attempt + 1) * 3  # 3秒、6秒
+                    logger.debug(f"获取板块 '{sector_name}' 失败（第{attempt+1}次）: {error_msg[:100]}，{wait_time}秒后重试...")
+                    time.sleep(wait_time)
+                else:
+                    logger.warning(f"获取板块 '{sector_name}' 失败（3次均失败）: {error_msg[:100]}")
+        
+        # 所有重试都失败，尝试备用接口（如果有）
         try:
-            # 这是你原来调用的接口，根据[citation:2]，这是获取行业成分股的正确接口
-            return ak.stock_board_industry_cons_em(symbol=sector_name)
+            logger.debug(f"尝试备用接口获取板块 '{sector_name}'...")
+            # 尝试使用另一个可能的接口（如果存在）
+            # 注意：这里可以根据实际情况添加其他数据源的接口
+            pass  # 暂时没有其他备用接口
         except Exception as e:
-            logger.debug(f"尝试获取板块 '{sector_name}' 时出错: {e}")
-            return None
+            logger.debug(f"备用接口也失败: {e}")
+        
+        # 所有尝试都失败，返回 None
+        return None
     
     
     def get_stock_history(self, symbol: str, period: str = "6mo") -> pd.DataFrame:
-        """获取个股历史数据（完全修复版）"""
-        self._rate_limit_check()
-        
+        """
+        获取个股历史数据（离线/稳健版）
+
+        说明：
+        - 完全移除 AkShare，对你当前网络环境更友好
+        - 只使用 BaoStock 获取日线数据（前复权）
+        """
+        # 计算日期范围
+        end_dt = datetime.now()
+        if period == "6mo":
+            start_dt = end_dt - timedelta(days=180)
+        elif period == "3mo":
+            start_dt = end_dt - timedelta(days=90)
+        elif period == "1mo":
+            start_dt = end_dt - timedelta(days=30)
+        else:
+            start_dt = end_dt - timedelta(days=180)
+
+        # 直接使用 BaoStock（日线，前复权）
         try:
-            # 提取代码
-            code = symbol.replace('.SS', '').replace('.SZ', '')
-            
-            # 计算日期范围
-            end_date = datetime.now()
-            if period == "6mo":
-                start_date = end_date - timedelta(days=180)
-            elif period == "3mo":
-                start_date = end_date - timedelta(days=90)
-            elif period == "1mo":
-                start_date = end_date - timedelta(days=30)
-            else:
-                start_date = end_date - timedelta(days=180)
-            
-            # 获取数据
-            df = ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_date.strftime('%Y%m%d'),
-                end_date=end_date.strftime('%Y%m%d'),
-                adjust="qfq"
+            bs_df = self._fetch_history_baostock(
+                symbol,
+                start_date=start_dt.strftime("%Y-%m-%d"),
+                end_date=end_dt.strftime("%Y-%m-%d"),
             )
-            
-            if df is None or df.empty:
-                logger.warning(f"股票 {symbol} 返回空数据")
-                return pd.DataFrame()
-            
-            # 调试：打印原始数据信息
-            logger.debug(f"原始数据形状: {df.shape}")
-            logger.debug(f"原始列名: {list(df.columns)}")
-            
-            # 方法：先收集所有列，再设置索引
-            df_clean = pd.DataFrame()
-            
-            # 第一步：找到日期列并提取
-            date_col = None
-            date_values = None
-            for col in df.columns:
-                col_str = str(col).lower()
-                if '日期' in col_str:
-                    date_col = col
-                    date_values = pd.to_datetime(df[col])
-                    break
-            
-            # 如果没找到日期列，使用第一列
-            if date_col is None:
-                date_values = pd.to_datetime(df.iloc[:, 0])
-            
-            # 第二步：识别并提取所有价格和成交量列（在设置索引之前）
-            column_mapping = {}
-            for col in df.columns:
-                col_str = str(col).lower()
-                if col == date_col or (date_col is None and col == df.columns[0]):
-                    continue  # 跳过日期列
-                elif '收盘' in col_str:
-                    column_mapping['close'] = col
-                elif '开盘' in col_str:
-                    column_mapping['open'] = col
-                elif '最高' in col_str:
-                    column_mapping['high'] = col
-                elif '最低' in col_str:
-                    column_mapping['low'] = col
-                elif '成交量' in col_str:
-                    column_mapping['volume'] = col
-                elif '成交额' in col_str:
-                    column_mapping['amount'] = col
-            
-            # 第三步：创建新的DataFrame，先添加所有列
-            for new_col, old_col in column_mapping.items():
-                df_clean[new_col] = pd.to_numeric(df[old_col], errors='coerce')
-            
-            # 第四步：设置日期索引
-            if date_values is not None and len(date_values) == len(df_clean):
-                df_clean.index = date_values
-            else:
-                # 如果长度不匹配，使用默认索引
-                logger.warning(f"日期列长度不匹配，使用默认索引")
-            
-            # 确保必要列存在
-            if 'close' not in df_clean.columns:
-                logger.error(f"股票 {symbol} 数据缺少收盘价列")
-                logger.error(f"可用列: {list(df_clean.columns)}")
-                logger.error(f"原始列: {list(df.columns)}")
-                return pd.DataFrame()
-            
-            # 检查数据质量
-            if df_clean['close'].isna().all():
-                logger.warning(f"股票 {symbol} 收盘价全部为NaN")
-                logger.debug(f"原始数据前3行:\n{df.head(3)}")
-            
-            # 填充缺失值（只填充中间缺失，不填充全部为NaN的情况）
-            df_clean = df_clean.ffill().bfill()
-            
-            return df_clean.sort_index()
-            
+            if bs_df is not None and not bs_df.empty and "close" in bs_df.columns and not bs_df["close"].isna().all():
+                logger.info("使用 BaoStock 获取 %s 成功（无 AkShare）", symbol)
+                return bs_df.sort_index().ffill().bfill()
         except Exception as e:
-            logger.error(f"获取股票 {symbol} 历史数据失败: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return pd.DataFrame()
+            logger.warning("BaoStock 获取 %s 失败: %s", symbol, e)
+
+        logger.error("获取股票 %s 历史数据失败（仅 BaoStock，未使用 AkShare）", symbol)
+        return pd.DataFrame()
 
 def test_data_fetcher():
     """测试数据获取器（修复版）"""

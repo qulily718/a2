@@ -79,7 +79,7 @@ class TimePatternAnalyzer:
         
         analysis_results = []
         
-        for stock in watchlist[:15]:  # 限制数量
+        for stock in watchlist:  # 分析全部股票
             try:
                 # 获取历史数据作为参考（实际应获取实时分时数据）
                 hist_data = self.data_fetcher.get_stock_history(stock['symbol'], period='1mo')
@@ -97,7 +97,7 @@ class TimePatternAnalyzer:
             'focus': '开盘强势股识别、资金流向判断',
             'recommendation': self._generate_opening_recommendation(analysis_results),
             'stocks_analyzed': len(analysis_results),
-            'results': analysis_results[:10]
+            'results': analysis_results
         }
     
     def _analyze_morning_mid(self, watchlist: List[Dict]) -> Dict:
@@ -106,7 +106,7 @@ class TimePatternAnalyzer:
         
         analysis_results = []
         
-        for stock in watchlist[:20]:
+        for stock in watchlist:
             try:
                 hist_data = self.data_fetcher.get_stock_history(stock['symbol'], period='1mo')
                 
@@ -123,7 +123,7 @@ class TimePatternAnalyzer:
             'focus': '上午趋势确认、回调机会识别',
             'recommendation': self._generate_mid_morning_recommendation(analysis_results),
             'stocks_analyzed': len(analysis_results),
-            'results': sorted(analysis_results, key=lambda x: x.get('score', 0), reverse=True)[:10]
+            'results': sorted(analysis_results, key=lambda x: x.get('score', 0), reverse=True)
         }
     
     def _analyze_noon_break(self, watchlist: List[Dict]) -> Dict:
@@ -132,7 +132,7 @@ class TimePatternAnalyzer:
         
         morning_summary = []
         
-        for stock in watchlist[:25]:
+        for stock in watchlist:
             try:
                 hist_data = self.data_fetcher.get_stock_history(stock['symbol'], period='1mo')
                 
@@ -149,7 +149,7 @@ class TimePatternAnalyzer:
             'mode': 'noon_break',
             'analysis_time': datetime.now().strftime('%H:%M'),
             'focus': '上午总结、下午走势预判',
-            'morning_summary': morning_summary[:15],
+            'morning_summary': morning_summary,
             'afternoon_outlook': afternoon_outlook,
             'recommendation': self._generate_noon_recommendation(morning_summary, afternoon_outlook)
         }
@@ -160,7 +160,7 @@ class TimePatternAnalyzer:
         
         analysis_results = []
         
-        for stock in watchlist[:20]:
+        for stock in watchlist:
             try:
                 hist_data = self.data_fetcher.get_stock_history(stock['symbol'], period='1mo')
                 
@@ -177,7 +177,7 @@ class TimePatternAnalyzer:
             'focus': '下午开盘走势、上午强势股延续性',
             'recommendation': self._generate_afternoon_open_recommendation(analysis_results),
             'stocks_analyzed': len(analysis_results),
-            'results': sorted(analysis_results, key=lambda x: x.get('afternoon_score', 0), reverse=True)[:10]
+            'results': sorted(analysis_results, key=lambda x: x.get('afternoon_score', 0), reverse=True)
         }
     
     def _analyze_afternoon_mid(self, watchlist: List[Dict]) -> Dict:
@@ -186,7 +186,7 @@ class TimePatternAnalyzer:
         
         analysis_results = []
         
-        for stock in watchlist[:20]:
+        for stock in watchlist:
             try:
                 hist_data = self.data_fetcher.get_stock_history(stock['symbol'], period='1mo')
                 
@@ -203,7 +203,7 @@ class TimePatternAnalyzer:
             'focus': '全天趋势确认、尾盘机会识别',
             'recommendation': self._generate_afternoon_mid_recommendation(analysis_results),
             'stocks_analyzed': len(analysis_results),
-            'results': sorted(analysis_results, key=lambda x: x.get('trend_score', 0), reverse=True)[:10]
+            'results': sorted(analysis_results, key=lambda x: x.get('trend_score', 0), reverse=True)
         }
     
     def _analyze_closing(self, watchlist: List[Dict]) -> Dict:
@@ -212,7 +212,7 @@ class TimePatternAnalyzer:
         
         analysis_results = []
         
-        for stock in watchlist[:15]:
+        for stock in watchlist:
             try:
                 hist_data = self.data_fetcher.get_stock_history(stock['symbol'], period='1mo')
                 
@@ -229,7 +229,7 @@ class TimePatternAnalyzer:
             'focus': '尾盘抢筹/抛售、次日预判',
             'recommendation': self._generate_closing_recommendation(analysis_results),
             'stocks_analyzed': len(analysis_results),
-            'results': sorted(analysis_results, key=lambda x: x.get('closing_score', 0), reverse=True)[:10]
+            'results': sorted(analysis_results, key=lambda x: x.get('closing_score', 0), reverse=True)
         }
     
     def _analyze_post_market(self, watchlist: List[Dict]) -> Dict:
@@ -264,7 +264,7 @@ class TimePatternAnalyzer:
         
         previous_day_analysis = []
         
-        for stock in watchlist[:30]:
+        for stock in watchlist:
             try:
                 previous_data = self.data_fetcher.get_stock_history(stock['symbol'], period='1mo')
                 
@@ -279,7 +279,7 @@ class TimePatternAnalyzer:
             'mode': 'pre_market',
             'analysis_time': datetime.now().strftime('%H:%M'),
             'focus': '隔夜消息、技术形态、当日策略',
-            'stock_analysis': previous_day_analysis[:15],
+            'stock_analysis': previous_day_analysis,
             'opening_prediction': self._predict_opening_impact(previous_day_analysis),
             'recommendation': self._generate_pre_market_recommendation(previous_day_analysis)
         }
@@ -290,7 +290,7 @@ class TimePatternAnalyzer:
         
         weekly_analysis = []
         
-        for stock in watchlist[:25]:
+        for stock in watchlist:
             try:
                 weekly_data = self.data_fetcher.get_stock_history(stock['symbol'], period='3mo')
                 
@@ -305,7 +305,7 @@ class TimePatternAnalyzer:
             'mode': 'weekend_analysis',
             'analysis_time': datetime.now().strftime('%H:%M'),
             'focus': '周线分析、技术形态、下周策略',
-            'weekly_analysis': weekly_analysis[:15],
+            'weekly_analysis': weekly_analysis,
             'next_week_outlook': self._predict_next_week_outlook(weekly_analysis),
             'recommendation': self._generate_weekend_recommendation(weekly_analysis)
         }
@@ -316,7 +316,7 @@ class TimePatternAnalyzer:
         
         general_analysis = []
         
-        for stock in watchlist[:20]:
+        for stock in watchlist:
             try:
                 recent_data = self.data_fetcher.get_stock_history(stock['symbol'], period='1mo')
                 
@@ -331,7 +331,7 @@ class TimePatternAnalyzer:
             'mode': 'general_analysis',
             'analysis_time': datetime.now().strftime('%H:%M'),
             'focus': '近期走势、技术指标、买卖点',
-            'results': sorted(general_analysis, key=lambda x: x.get('opportunity_score', 0), reverse=True)[:10],
+            'results': sorted(general_analysis, key=lambda x: x.get('opportunity_score', 0), reverse=True),
             'recommendation': self._generate_general_recommendation(general_analysis)
         }
     
